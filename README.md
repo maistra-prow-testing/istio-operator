@@ -1,6 +1,6 @@
 # Maistra Istio Operator
 
-This project is an operator that can be used to manage the installat [Istio](https://istio.io) control plane. test
+This project is an operator that can be used to manage the installat [Istio](https://istio.io) control plane.
 
 ## Installation
 
