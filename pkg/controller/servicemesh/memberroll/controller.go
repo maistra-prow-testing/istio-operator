@@ -31,9 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-const controllerName = "controller_servicemeshmemberroll"
-
-var log = logf.Log.WithName(controllerName)
+const controllerName = "servicemeshmemberroll-controller"
 
 // Add creates a new ServiceMeshMemberRoll Controller and adds it to the Manager. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
@@ -50,7 +48,7 @@ func newReconciler(cl client.Client, scheme *runtime.Scheme, eventRecorder recor
 			Scheme:        scheme,
 			EventRecorder: eventRecorder,
 			PatchFactory:  common.NewPatchFactory(cl),
-			Log:           log,
+			Log:           logf.Log.WithName(controllerName),
 		},
 		namespaceReconcilerFactory: namespaceReconcilerFactory,
 		kialiReconciler:            kialiReconciler,
@@ -58,9 +56,9 @@ func newReconciler(cl client.Client, scheme *runtime.Scheme, eventRecorder recor
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
-func add(mgr manager.Manager, r reconcile.Reconciler) error {
+func add(mgr manager.Manager, r *MemberRollReconciler) error {
 	// Create a new controller
-	c, err := controller.New("servicemeshmemberroll-controller", mgr, controller.Options{MaxConcurrentReconciles: common.MemberRollReconcilers, Reconciler: r})
+	c, err := controller.New(controllerName, mgr, controller.Options{MaxConcurrentReconciles: common.MemberRollReconcilers, Reconciler: r})
 	if err != nil {
 		return err
 	}
@@ -86,7 +84,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 			list := &v1.ServiceMeshMemberRollList{}
 			err := mgr.GetClient().List(context.TODO(), client.MatchingField("spec.members", ns.Meta.GetName()), list)
 			if err != nil {
-				log.Error(err, "Could not list ServiceMeshMemberRolls")
+				r.Log.Error(err, "Could not list ServiceMeshMemberRolls")
 			}
 
 			var requests []reconcile.Request
@@ -126,7 +124,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 			list := &v1.ServiceMeshMemberRollList{}
 			err := mgr.GetClient().List(context.TODO(), client.InNamespace(smcpMap.Meta.GetNamespace()), list)
 			if err != nil {
-				log.Error(err, "Could not list ServiceMeshMemberRolls")
+				r.Log.Error(err, "Could not list ServiceMeshMemberRolls")
 			}
 
 			var requests []reconcile.Request
@@ -168,7 +166,7 @@ type MemberRollReconciler struct {
 // Reconcile reads that state of the cluster for a ServiceMeshMemberRoll object and makes changes based on the state read
 // and what is in the ServiceMeshMemberRoll.Spec
 func (r *MemberRollReconciler) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	reqLogger := log.WithValues("ServiceMeshMemberRoll", request)
+	reqLogger := r.Log.WithValues("ServiceMeshMemberRoll", request)
 	reqLogger.Info("Processing ServiceMeshMemberRoll")
 
 	defer func() {
@@ -353,7 +351,7 @@ func (r *MemberRollReconciler) Reconcile(request reconcile.Request) (reconcile.R
 	} else if len(unconfiguredMembers) > 0 { // required namespace that was missing has been created
 		reqLogger.Info("Reconciling newly created namespaces associated with this ServiceMeshMemberRoll")
 
-		newConfiguredMembers, err, nsErrors = r.reconcileNamespaces(unconfiguredMembers, nil, instance.Namespace, meshVersion, reqLogger)
+		newConfiguredMembers, err, nsErrors = r.reconcileNamespaces(requiredMembers, nil, instance.Namespace, meshVersion, reqLogger)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -406,6 +404,10 @@ func (r *MemberRollReconciler) findConfiguredNamespaces(meshNamespace string) (c
 }
 
 func (r *MemberRollReconciler) reconcileNamespaces(namespacesToReconcile, namespacesToRemove sets.String, controlPlaneNamespace string, controlPlaneVersion string, reqLogger logr.Logger) (configuredMembers []string, err error, nsErrors []error) {
+	// current configuredNamespaces are namespacesToRemove minus control plane namespace
+	configured := sets.NewString(namespacesToRemove.List()...)
+	configured.Delete(controlPlaneNamespace)
+
 	// create reconciler
 	reconciler, err := r.namespaceReconcilerFactory(r.Client, reqLogger, controlPlaneNamespace, controlPlaneVersion, common.IsCNIEnabled)
 	if err != nil {
@@ -420,6 +422,8 @@ func (r *MemberRollReconciler) reconcileNamespaces(namespacesToReconcile, namesp
 		err = reconciler.removeNamespaceFromMesh(ns)
 		if err != nil {
 			nsErrors = append(nsErrors, err)
+		} else {
+			configured.Delete(ns)
 		}
 	}
 	for ns := range namespacesToReconcile {
@@ -436,9 +440,10 @@ func (r *MemberRollReconciler) reconcileNamespaces(namespacesToReconcile, namesp
 				nsErrors = append(nsErrors, err)
 			}
 		} else {
-			configuredMembers = append(configuredMembers, ns)
+			configured.Insert(ns)
 		}
 	}
+	configuredMembers = configured.List()
 	return configuredMembers, nil, nsErrors
 }
 
